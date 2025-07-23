@@ -1,0 +1,93 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+// 引入 OpenZeppelin 的 ERC20 标准实现
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+// 引入 Ownable，便于设置仅管理员可调用的函数
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract MemeToken is ERC20, Ownable {
+    // 总税费比例（百分比，单位是整数 5 表示 5%）
+    uint256 public taxFee = 5;
+    // 税中用于销毁的比例
+    uint256 public burnFee = 2;
+    // 税中用于打入营销钱包的比例
+    uint256 public marketingFee = 3;
+    // 营销钱包地址
+    address public marketingWallet;
+    // 单地址最大持币量（按总量百分比）
+    uint256 public maxWalletPercent = 2;
+    // 代币总供应量（10 亿 * 10^18）
+    uint256 public totalSupplyAmount = 1_000_000_000 * 1e18;
+
+    // 记录哪些地址是免税的
+    mapping(address => bool) private _isExcludedFromFee;
+
+    // 构造函数：部署时调用，初始化名称、符号和总供应量
+    constructor(address _marketingWallet) ERC20("MemeToken", "MEME") {
+        marketingWallet = _marketingWallet;
+        // Mint 给部署者全部初始代币
+        _mint(msg.sender, totalSupplyAmount);
+        // 部署者和营销钱包默认免税
+        _isExcludedFromFee[msg.sender] = true;
+        _isExcludedFromFee[marketingWallet] = true;
+    }
+
+    // 重写转账逻辑，实现税费和限制功能
+    function _transfer(address sender, address recipient, uint256 amount) internal override {
+        // 如果发送者或接收者是免税地址，直接转账
+        if (_isExcludedFromFee[sender] || _isExcludedFromFee[recipient]) {
+            super._transfer(sender, recipient, amount);
+            return;
+        }
+
+        // 判断接收者是否超过最大持币限制（反鲸鱼）
+        require(
+            balanceOf(recipient) + amount <= (totalSupply() * maxWalletPercent / 100),
+            "Exceeds max wallet limit"
+        );
+
+        // 计算总税费
+        uint256 taxAmount = (amount * taxFee) / 100;
+        // 计算销毁部分
+        uint256 burnAmount = (amount * burnFee) / 100;
+        // 计算营销部分
+        uint256 marketingAmount = (amount * marketingFee) / 100;
+        // 实际发送的金额（减去全部税费）
+        uint256 netAmount = amount - taxAmount;
+
+        // 执行销毁操作（减少总供应量）
+        _burn(sender, burnAmount);
+
+        // 将营销费用转给营销钱包
+        super._transfer(sender, marketingWallet, marketingAmount);
+
+        // 将剩余代币发送给收款地址
+        super._transfer(sender, recipient, netAmount - burnAmount - marketingAmount);
+    }
+
+    // 🛠 管理函数：设置各项税率（仅限合约拥有者调用）
+    function setFees(uint256 _tax, uint256 _burn, uint256 _marketing) external onlyOwner {
+        require(_tax == _burn + _marketing, "Tax must equal burn + marketing");
+        taxFee = _tax;
+        burnFee = _burn;
+        marketingFee = _marketing;
+    }
+
+    // 设置营销钱包地址
+    function setMarketingWallet(address _wallet) external onlyOwner {
+        marketingWallet = _wallet;
+        _isExcludedFromFee[_wallet] = true;
+    }
+
+    // 设置某个地址是否免税
+    function excludeFromFee(address _addr, bool _excluded) external onlyOwner {
+        _isExcludedFromFee[_addr] = _excluded;
+    }
+
+    // 设置最大持币上限（按百分比）
+    function setMaxWalletPercent(uint256 _percent) external onlyOwner {
+        require(_percent >= 1 && _percent <= 100, "Invalid %");
+        maxWalletPercent = _percent;
+    }
+}
