@@ -1,0 +1,164 @@
+Foundry 框架理论知识回顾
+Foundry 框架的核心组件及功能：
+
+Forge：
+
+测试框架：支持 Solidity 编写的单元/集成测试，提供断言库、作弊码（Cheatcodes）等
+
+Gas 分析：自动报告函数调用的 Gas 消耗
+
+覆盖率报告：生成代码覆盖率分析
+
+Fuzz 测试：支持基于属性的随机测试
+
+调试功能：提供栈跟踪和失败原因分析
+
+Cast：
+
+链交互工具：通过 CLI 与合约交互（调用/发送交易）
+
+编码/解码：处理 ABI 编码、calldata 转换等
+
+环境管理：处理私钥、RPC 连接等
+
+Anvil：
+
+本地开发链：模拟以太坊节点（类似 Ganache）
+
+分叉功能：支持主网状态分叉测试
+
+账户管理：预配置测试账户和资金
+
+Chisel：
+
+实时 Solidity REPL：快速验证代码片段
+
+
+
+
+1 基础合约与测试
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+contract Arithmetic {
+    function add(uint256 a, uint256 b) external pure returns (uint256) {
+        return a + b;
+    }
+
+    function subtract(uint256 a, uint256 b) external pure returns (uint256) {
+        require(a >= b, "a < b");
+        return a - b;
+    }
+}
+
+
+2 测试代码
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+import "forge-std/Test.sol";
+import "../src/Arithmetic.sol";
+
+contract ArithmeticTest is Test {
+    Arithmetic internal arith;
+
+    function setUp() public {
+        arith = new Arithmetic();
+    }
+
+    function testAdd() public {
+        uint256 gasBefore = gasleft();
+        uint256 result = arith.add(100, 50);
+        uint256 gasUsed = gasBefore - gasleft();
+        
+        emit log_named_uint("Add Gas Used (Original)", gasUsed);
+        assertEq(result, 150);
+    }
+
+    function testSubtract() public {
+        uint256 gasBefore = gasleft();
+        uint256 result = arith.subtract(100, 50);
+        uint256 gasUsed = gasBefore - gasleft();
+        
+        emit log_named_uint("Subtract Gas Used (Original)", gasUsed);
+        assertEq(result, 50);
+    }
+}
+
+
+
+原始 Gas 消耗记录：
+
+
+[PASS] testAdd() (gas: 3135)
+Logs:
+  Add Gas Used (Original): 168
+
+[PASS] testSubtract() (gas: 3213)
+Logs:
+  Subtract Gas Used (Original): 246
+
+
+
+2. Gas 优化策略
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+contract OptimizedArithmetic {
+    // 策略1：使用 unchecked 避免冗余检查（减法）
+    function subtract(uint256 a, uint256 b) external pure returns (uint256) {
+        require(a >= b, "a < b");
+        unchecked { return a - b; }  // 关闭溢出检查
+    }
+
+    // 策略2：内联汇编实现加法
+    function add(uint256 a, uint256 b) external pure returns (uint256 c) {
+        assembly {
+            c := add(a, b)
+        }
+    }
+}
+
+
+优化后测试结果：
+
+[PASS] testAdd() (gas: 3074)
+Logs:
+  Add Gas Used (Optimized): 107
+
+[PASS] testSubtract() (gas: 3141)
+Logs:
+  Subtract Gas Used (Optimized): 174
+
+
+优化策略分析：
+
+unchecked 块（减法）：
+
+原理：Solidity 0.8+ 默认启用算术溢出检查，通过 unchecked 关闭安全检查
+
+效果：减少 SUB 操作码的额外检查开销
+
+风险：仅在确保逻辑安全时使用（本例中 require 已保证 a >= b）
+
+内联汇编（加法）：
+
+原理：绕过 Solidity 的语法检查，直接使用 EVM 操作码 ADD
+
+效果：消除 Solidity 编译器生成的冗余检查代码
+
+风险：需手动确保类型安全，仅建议在简单操作中使用
+
+优化结论
+显著降低 Gas：两项优化平均减少 32.8% 的 Gas 消耗
+
+策略适用性：
+
+unchecked 适合已显式检查的算术操作
+
+内联汇编适合极简操作，复杂逻辑可能适得其反
+
+风险权衡：优化需在安全性和成本间平衡，关键业务逻辑应优先保证安全
